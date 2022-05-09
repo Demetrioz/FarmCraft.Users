@@ -1,0 +1,8 @@
+- name: Introduction
+  href: intro.md
+- name: Glossary
+  href: glossary.md
+- name: Using FarmCraft.Users
+  items:
+    - name: Setup
+      href: setup.md
