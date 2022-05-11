@@ -3,14 +3,14 @@ using FarmCraft.Core.Services.Logging;
 using FarmCraft.Users.Data.Context;
 using Microsoft.EntityFrameworkCore;
 
-namespace FarmCraft.Users.Data.Repositories.User
+namespace FarmCraft.Users.Data.Repositories.Invitation
 {
-    public class UserRepository : IUserRepository
+    public class InvitationRepository : IInvitationRepository
     {
         private readonly ILogService _logger;
         private readonly UserContext? _dbContext;
 
-        public UserRepository(IFarmCraftContext dbContext, ILogService logger)
+        public InvitationRepository(IFarmCraftContext dbContext, ILogService logger)
         {
             _logger = logger;
             _dbContext = dbContext as UserContext;
@@ -22,25 +22,25 @@ namespace FarmCraft.Users.Data.Repositories.User
                 throw new ArgumentNullException(nameof(_logger));
         }
 
-        public async Task<Entities.User?> FindUserById(string id)
+        public async Task<Entities.Invitation?> FindInvitationById(string id)
         {
-            if (_dbContext == null)
+            if(_dbContext == null)
                 throw new ArgumentNullException(nameof(_dbContext));
 
-            return await _dbContext.Users
-                .Where(u => u.AzureId == id)
+            return await _dbContext.Invitations
+                .Where(i => i.InvitationId == id)
                 .FirstOrDefaultAsync();
         }
 
-        public async Task<Entities.User> CreateUser(Entities.User user)
+        public async Task<Entities.Invitation> CreateInvitation(Entities.Invitation invitation)
         {
             if (_dbContext == null)
                 throw new ArgumentNullException(nameof(_dbContext));
 
-            Entities.User newUser = (await _dbContext.AddAsync(user)).Entity;
+            Entities.Invitation newInvitation = (await _dbContext.AddAsync(invitation)).Entity;
             await _dbContext.SaveChangesAsync();
 
-            return newUser;
+            return newInvitation;
         }
     }
 }

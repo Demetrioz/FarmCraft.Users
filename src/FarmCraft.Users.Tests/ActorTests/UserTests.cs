@@ -8,6 +8,7 @@ using FarmCraft.Users.Core.Actors;
 using FarmCraft.Users.Data.Context;
 using FarmCraft.Users.Data.Entities;
 using FarmCraft.Users.Data.Messages.User;
+using FarmCraft.Users.Data.Repositories.Invitation;
 using FarmCraft.Users.Data.Repositories.Organization;
 using FarmCraft.Users.Data.Repositories.User;
 using FarmCraft.Users.Tests.Config;
@@ -16,6 +17,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -25,11 +27,15 @@ namespace FarmCraft.Users.Tests.ActorTests
     [TestFixture]
     public class UserTests : TestKit
     {
+        private readonly string _orgOwnerId = Guid.NewGuid().ToString();
+        private readonly string _invitedUserId = Guid.NewGuid().ToString();
+        private readonly string _organizationName = "Test Organization";
+        private readonly string _inviteEmail = "test@test.com";
+        private readonly Role _inviteRole = Role.Member;
+
         private IServiceProvider? _serviceProvider { get; set; }
-        private string? _orgOwnerId { get; set; }
-        private string? _invitedUserId { get; set; }
-        private string? _organizationName { get; set; }
         private Organization? _organization { get; set; }
+        private string? _inviteId { get; set; }
 
         [OneTimeSetUp]
         public void Init()
@@ -46,12 +52,30 @@ namespace FarmCraft.Users.Tests.ActorTests
                 .AddDbContext<IFarmCraftContext, UserContext>(options =>
                     options.UseCosmos(settings.CosmosConnection, settings.CosmosDb))
                 .AddTransient<IUserRepository, UserRepository>()
+                .AddTransient<IOrganizationRepository, OrganizationRepository>()
+                .AddTransient<IInvitationRepository, InvitationRepository>()
                 .AddTransient<ILogService, FarmCraftLogService>()
                 .BuildServiceProvider();
+        }
 
-            _orgOwnerId = Guid.NewGuid().ToString();
-            _invitedUserId = Guid.NewGuid().ToString();
-            _organizationName = "Test Organization";
+        [OneTimeTearDown]
+        public void Cleanup()
+        {
+            using (IServiceScope scope = _serviceProvider.CreateScope())
+            {
+                UserContext dbContext = scope.ServiceProvider
+                    .GetRequiredService<UserContext>();
+
+                List<User> users = dbContext.Users.ToList();
+                List<Invitation> invitations = dbContext.Invitations.ToList();
+                List<Organization> organizations = dbContext.Organizations.ToList();
+
+                dbContext.RemoveRange(users);
+                dbContext.RemoveRange(invitations);
+                dbContext.RemoveRange(organizations);
+
+                dbContext.SaveChanges();
+            }
         }
 
         [SetUp]
@@ -63,6 +87,7 @@ namespace FarmCraft.Users.Tests.ActorTests
 
 
         [Test]
+        [Order(100)]
         public async Task CanCreateContext()
         {
             using (IServiceScope scope = _serviceProvider.CreateScope())
@@ -77,6 +102,7 @@ namespace FarmCraft.Users.Tests.ActorTests
         }
 
         [Test]
+        [Order(101)]
         public void UserCanRegister()
         {
             using (IServiceScope scope = _serviceProvider.CreateScope())
@@ -85,14 +111,13 @@ namespace FarmCraft.Users.Tests.ActorTests
                     .GetRequiredService<IUserRepository>();
                 IOrganizationRepository orgRepo = scope.ServiceProvider
                     .GetRequiredService<IOrganizationRepository>();
+                IInvitationRepository inviteRepo = scope.ServiceProvider
+                    .GetRequiredService<IInvitationRepository>();
                 ILogService logger = scope.ServiceProvider
                     .GetRequiredService<ILogService>();
 
                 IActorRef userActor = Sys.ActorOf(
-                    Props.Create(() => new UserActor(userRepo, orgRepo, logger)));
-
-                if (string.IsNullOrEmpty(_orgOwnerId) || string.IsNullOrEmpty(_organizationName))
-                    Assert.Fail("Owner Id or Orginization Name not set");
+                    Props.Create(() => new UserActor(userRepo, orgRepo, inviteRepo, logger)));
 
                 userActor.Tell(new AskToRegisterUser(_orgOwnerId, _organizationName));
 
@@ -134,38 +159,128 @@ namespace FarmCraft.Users.Tests.ActorTests
         }
 
         [Test]
-        public async Task WillNotCreateDuplicateUsers()
+        [Order(102)]
+        public void WillNotRegisterDuplicateUsers()
         {
             using (IServiceScope scope = _serviceProvider.CreateScope())
             {
-                IActorRef userActor = Sys.ActorOf(
-                    Props.Create(() => new UserActor()));
+                IUserRepository userRepo = scope.ServiceProvider
+                    .GetRequiredService<IUserRepository>();
+                IOrganizationRepository orgRepo = scope.ServiceProvider
+                    .GetRequiredService<IOrganizationRepository>();
+                IInvitationRepository inviteRepo = scope.ServiceProvider
+                    .GetRequiredService<IInvitationRepository>();
+                ILogService logger = scope.ServiceProvider
+                    .GetRequiredService<ILogService>();
 
-                userActor.Tell(new AskToCreateUser());
+                IActorRef userActor = Sys.ActorOf(
+                    Props.Create(() => new UserActor(userRepo, orgRepo, inviteRepo, logger)));
+
+                userActor.Tell(new AskToRegisterUser(_orgOwnerId, _organizationName));
+
+                FarmCraftActorResponse response = ExpectMsg<FarmCraftActorResponse>(
+                    TimeSpan.FromSeconds(1));
+
+                Assert.True(response != null);
+                Assert.AreEqual(response?.Status, ResponseStatus.Failure);
+                Assert.IsNotNull(response?.Error);
             }
         }
 
         [Test]
-        public async Task UserCanBeInvited()
+        [Order(103)]
+        public void UserCanBeInvited()
         {
             using (IServiceScope scope = _serviceProvider.CreateScope())
             {
-                IActorRef userActor = Sys.ActorOf(
-                    Props.Create(() => new UserActor()));
+                IUserRepository userRepo = scope.ServiceProvider
+                    .GetRequiredService<IUserRepository>();
+                IOrganizationRepository orgRepo = scope.ServiceProvider
+                    .GetRequiredService<IOrganizationRepository>();
+                IInvitationRepository inviteRepo = scope.ServiceProvider
+                    .GetRequiredService<IInvitationRepository>();
+                ILogService logger = scope.ServiceProvider
+                    .GetRequiredService<ILogService>();
 
-                userActor.Tell(new AskToInviteUser());
+                IActorRef userActor = Sys.ActorOf(
+                    Props.Create(() => new UserActor(userRepo, orgRepo, inviteRepo, logger)));
+
+                userActor.Tell(new AskToInviteUser(
+                    _orgOwnerId, 
+                    _organization.OrganizationId, 
+                    _inviteEmail, 
+                    _inviteRole
+                ));
+
+                FarmCraftActorResponse response = ExpectMsg<FarmCraftActorResponse>(
+                    TimeSpan.FromSeconds(1));
+
+                Assert.True(response != null);
+                Assert.AreEqual(response?.Status, ResponseStatus.Success);
+
+                Invitation invite = response?.Data as Invitation;
+                Assert.IsNotNull(invite);
+                Assert.AreEqual(invite?.InvitedBy, _orgOwnerId);
+                Assert.AreEqual(invite?.Email, _inviteEmail);
+                Assert.AreEqual(invite?.RegistrationStatus, RegistrationStatus.Invited);
+                Assert.AreEqual(invite?.Role, _inviteRole);
+
+                _inviteId = invite?.InvitationId;
             }
         }
 
         [Test]
-        public async Task InvitedUserCanRegister()
+        [Order(104)]
+        public void InvitedUserCanRegister()
         {
             using (IServiceScope scope = _serviceProvider.CreateScope())
             {
-                IActorRef userActor = Sys.ActorOf(
-                    Props.Create(() => new UserActor()));
+                IUserRepository userRepo = scope.ServiceProvider
+                    .GetRequiredService<IUserRepository>();
+                IOrganizationRepository orgRepo = scope.ServiceProvider
+                    .GetRequiredService<IOrganizationRepository>();
+                IInvitationRepository inviteRepo = scope.ServiceProvider
+                    .GetRequiredService<IInvitationRepository>();
+                ILogService logger = scope.ServiceProvider
+                    .GetRequiredService<ILogService>();
 
-                userActor.Tell(new AskToCreateUser());
+                IActorRef userActor = Sys.ActorOf(
+                    Props.Create(() => new UserActor(userRepo, orgRepo, inviteRepo, logger)));
+
+                userActor.Tell(
+                    new AskToRegisterUser(
+                        _invitedUserId, 
+                        _organizationName, 
+                        _inviteId
+                    ));
+
+                FarmCraftActorResponse response = ExpectMsg<FarmCraftActorResponse>(
+                    TimeSpan.FromSeconds(1));
+
+                Assert.True(response != null);
+                Assert.AreEqual(response?.Status, ResponseStatus.Success);
+
+                User? newUser = response?.Data as User;
+                Assert.IsNotNull(newUser);
+
+                PartialOrganization? newUserOrg = newUser?.Organizations?.FirstOrDefault();
+                Assert.IsNotNull(newUserOrg);
+                Assert.IsNotNull(newUserOrg?.Id);
+
+                Assert.AreEqual(newUser?.AzureId, _invitedUserId);
+                Assert.AreEqual(newUser?.Preferences.AlertPreference, AlertPreference.Email);
+                Assert.AreEqual(newUser?.Organizations.Count, 1);
+                Assert.AreEqual(newUserOrg?.Name, _organizationName);
+                Assert.AreEqual(newUserOrg?.Role, _inviteRole);
+
+                UserContext dbContext = scope.ServiceProvider
+                    .GetRequiredService<UserContext>();
+
+                Invitation? invitation = dbContext.Invitations
+                    .FirstOrDefault();
+
+                Assert.IsNotNull(invitation);
+                Assert.AreEqual(invitation?.RegistrationStatus, RegistrationStatus.Registered);
             }
         }
     }

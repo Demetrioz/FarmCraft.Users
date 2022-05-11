@@ -1,8 +1,10 @@
 ﻿using Akka.Actor;
 using FarmCraft.Core.Messages;
 using FarmCraft.Core.Services.Logging;
+using FarmCraft.Users.Core.Utilities;
 using FarmCraft.Users.Data.Entities;
 using FarmCraft.Users.Data.Messages.User;
+using FarmCraft.Users.Data.Repositories.Invitation;
 using FarmCraft.Users.Data.Repositories.Organization;
 using FarmCraft.Users.Data.Repositories.User;
 
@@ -13,19 +15,43 @@ namespace FarmCraft.Users.Core.Actors
         private readonly ILogService _logger;
         private readonly IUserRepository _userRepo;
         private readonly IOrganizationRepository _orgRepo;
+        private readonly IInvitationRepository _inviteRepo;
 
         public UserActor(
             IUserRepository userRepo, 
             IOrganizationRepository orgRepo, 
+            IInvitationRepository inviteRepo,
             ILogService logger
         )
         {
             _userRepo = userRepo;
             _orgRepo = orgRepo;
+            _inviteRepo = inviteRepo;
             _logger = logger;
 
-            Receive<AskToInviteUser>(message => HandleUserCreation(message));
+            Receive<AskToInviteUser>(message => HandleUserInvitation(message));
             Receive<AskToRegisterUser>(message => HandleUserRegistration(message));
+        }
+
+        private void HandleUserInvitation(AskToInviteUser message)
+        {
+            IActorRef sender = Sender;
+            IActorRef self = Self;
+            string requestId = Guid.NewGuid().ToString();
+
+            InviteUser(message)
+                .ContinueWith(result =>
+                {
+                    if(result.Exception != null)
+                    {
+                        _logger.LogAsync(result.Exception).Wait();
+                        sender.Tell(ActorResponse.Failure(requestId, result.Exception.Message));
+                    }
+                    else
+                        sender.Tell(ActorResponse.Success(requestId, result.Result));
+                });
+
+            self.Tell(PoisonPill.Instance);
         }
 
         private void HandleUserRegistration(AskToRegisterUser message)
@@ -34,128 +60,129 @@ namespace FarmCraft.Users.Core.Actors
             IActorRef self = Self;
             string requestId = Guid.NewGuid().ToString();
 
-            try
-            {
-                RegisterUser(message.UserId, message.OrganizationName)
-                    .ContinueWith(result =>
+            RegisterUser(message)
+                .ContinueWith(result =>
+                {
+                    if(result.Exception != null)
                     {
+                        _logger.LogAsync(result.Exception).Wait();
+                        sender.Tell(ActorResponse.Failure(requestId, result.Exception.Message));
+                    }
+                    else
                         sender.Tell(ActorResponse.Success(requestId, result.Result));
-                    });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogAsync(ex).Wait();
-                sender.Tell(ActorResponse.Failure(requestId, ex.Message));
-            }
-            finally
-            {
-                self.Tell(PoisonPill.Instance);
-            }
+                });
+
+            self.Tell(PoisonPill.Instance);
         }
 
-        private void HandleUserCreation(AskToInviteUser message)
+        private async Task<User> RegisterUser(AskToRegisterUser message)
         {
-            IActorRef sender = Sender;
-            IActorRef self = Self;
-            string requestId = Guid.NewGuid().ToString();
-
-            try
-            {
-                CreateUser(message.UserId, message.OrganizationName)
-                    .ContinueWith(result =>
-                    {
-                        sender.Tell(ActorResponse.Success(requestId, result.Result));
-                    });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogAsync(ex).Wait();
-                sender.Tell(ActorResponse.Failure(requestId, ex.Message));
-            }
-            finally
-            {
-                self.Tell(PoisonPill.Instance);
-            }
-        }
-
-        private async Task<User> RegisterUser(string userId, string organizationName)
-        {
-            User? existingUser = await _userRepo.FindUserById(userId);
+            User? existingUser = await _userRepo.FindUserById(message.UserId);
             
             if (existingUser != null)
-                throw new Exception($"Unable to register user with id {userId}");
+                throw new Exception($"Unable to register user with id {message.UserId}");
 
             string orgId = Guid.NewGuid().ToString();
+            Invitation? invite = await _inviteRepo.FindInvitationById(message.InvitationId ?? "");
 
             User newUser = new User
             {
-                AzureId = userId,
+                AzureId = message.UserId,
                 Preferences = new Preferences
                 {
                     AlertPreference = AlertPreference.Email
                 },
-                Organizations = new List<PartialOrganization>
+
+            };
+
+            if(invite != null)
+            {
+                Organization? inviteOrg = await _orgRepo.FindOrganizationById(invite.InvitationOrgId);
+
+                inviteOrg?.Members.Add(new PartialUser
+                {
+                    AzureId = message.UserId,
+                });
+
+                invite.RegistrationStatus = RegistrationStatus.Registered;
+                newUser.Organizations = new List<PartialOrganization>
+                {
+                    new PartialOrganization
+                    {
+                        Id = invite.InvitationOrgId,
+                        Name = invite.InvitationOrgName,
+                        Role = invite.Role
+                    }
+                };
+            }
+            else
+            {
+                newUser.Organizations = new List<PartialOrganization>
                 {
                     new PartialOrganization
                     {
                         Id = orgId,
-                        Name = organizationName,
+                        Name = message.OrganizationName,
                         Role = Role.Owner
                     }
-                }
-            };
+                };
 
-            Organization newOrg = new Organization
-            {
-                OrganizationId = orgId,
-                Name = organizationName,
-                OwnerId = userId,
-                Members = new List<PartialUser>
+                Organization newOrg = new Organization
                 {
-                    new PartialUser
+                    OrganizationId = orgId,
+                    Name = message.OrganizationName,
+                    OwnerId = message.UserId,
+                    Members = new List<PartialUser>
                     {
-                        AzureId = userId
+                        new PartialUser
+                        {
+                            AzureId = message.UserId
+                        }
                     }
-                }
-            };
+                };
 
-            var userRequest = _userRepo.CreateUser(newUser);
-            var taskRequest = _orgRepo.CreateOrganization(newOrg);
+                await _orgRepo.CreateOrganization(newOrg);
+            }
 
-            await Task.WhenAll(userRequest, taskRequest);
-
-            return userRequest.Result;
+            User user = await _userRepo.CreateUser(newUser);
+            return user;
         }
 
-        private async Task<User> CreateUser(string userId, string organizationId)
+        private async Task<Invitation> InviteUser(AskToInviteUser message)
         {
-            User? existingUser = await _userRepo.FindUserById(userId);
+            if (!RegexUtility.IsValidEmail(message.InvitedEmail))
+                throw new ArgumentException("Invalid email");
 
-            if (existingUser != null)
-                throw new Exception($"Unable to register user with id {userId}");
+            User? requestor = await _userRepo.FindUserById(message.RequestorId);
+            if (requestor == null)
+                throw new Exception("Requestor not found");
 
+            PartialOrganization? requestorOrg = requestor.Organizations
+                .Where(o => o.Id == message.OrganizationId)
+                .FirstOrDefault();
 
+            if (
+                requestorOrg == null 
+                || (requestorOrg.Role != Role.Owner && requestorOrg.Role != Role.Admin)
+            )
+                throw new Exception("Insufficient permissions");
 
-            // User exists, but has only been invited
-            else if (existingUser != null && existingUser.RegistrationStatus == RegistrationStatus.Invited)
+            Invitation invite = new Invitation
             {
-                existingUser.AzureId = userId;
-                existingUser.RegistrationStatus = RegistrationStatus.Registered;
-            }
-
-            // User doesn't exist
-            else
-            {
-
-            }
-
-            User newUser = new User
-            {
-                AzureId = userId,
-                RegistrationStatus
+                InvitationId = Guid.NewGuid().ToString(),
+                InvitationOrgId = requestorOrg.Id,
+                InvitationOrgName = requestorOrg.Name,
+                Email = message.InvitedEmail,
+                InvitedBy = requestor.AzureId,
+                RegistrationStatus = RegistrationStatus.Invited,
+                Role = message.InvitedRole
             };
 
-            return newUser;
+            // TODO: Send email to user
+            // Publish to Service Bus -> Receive by Notification Service -> Sent to Sendgrid
+
+            var result = await _inviteRepo.CreateInvitation(invite);
+            return result;
         }
     }
 }
