@@ -9,7 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="FarmCraft.Core" Version="0.0.4-alpha" />
+    <PackageReference Include="Akka.Remote" Version="1.4.38" />
+    <PackageReference Include="FarmCraft.Core" Version="0.0.5-alpha" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="6.0.0" />
     <PackageReference Include="Microsoft.Graph" Version="4.27.0" />
     <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.14.0" />

@@ -12,25 +12,51 @@ namespace FarmCraft.Users.Core.Actors
 {
     public class UserActor : ReceiveActor
     {
+        private readonly IServiceScope _scope;
         private readonly ILogService _logger;
         private readonly IUserRepository _userRepo;
         private readonly IOrganizationRepository _orgRepo;
         private readonly IInvitationRepository _inviteRepo;
 
-        public UserActor(
-            IUserRepository userRepo, 
-            IOrganizationRepository orgRepo, 
-            IInvitationRepository inviteRepo,
-            ILogService logger
-        )
+        public UserActor(IServiceProvider serviceProvider)
         {
-            _userRepo = userRepo;
-            _orgRepo = orgRepo;
-            _inviteRepo = inviteRepo;
-            _logger = logger;
+            _scope = serviceProvider.CreateScope();
+            _userRepo = _scope.ServiceProvider.GetRequiredService<IUserRepository>();
+            _orgRepo = _scope.ServiceProvider.GetRequiredService<IOrganizationRepository>();
+            _inviteRepo = _scope.ServiceProvider.GetRequiredService<IInvitationRepository>();
+            _logger = _scope.ServiceProvider.GetRequiredService<ILogService>();
 
+            Receive<AskForUser>(message => HandleUserSearch(message));
             Receive<AskToInviteUser>(message => HandleUserInvitation(message));
             Receive<AskToRegisterUser>(message => HandleUserRegistration(message));
+        }
+
+        protected override void PostStop()
+        {
+            _scope.Dispose();
+        }
+
+        private void HandleUserSearch(AskForUser message)
+        {
+            IActorRef sender = Sender;
+            IActorRef self = Self;
+            string requestId = Guid.NewGuid().ToString();
+
+            FindUser(message)
+                .ContinueWith(result =>
+                {
+                    if (result.Exception != null)
+                    {
+                        _logger.LogAsync(result.Exception).Wait();
+                        sender.Tell(ActorResponse.Failure(requestId, result.Exception.Message));
+                    }
+                    else
+                        sender.Tell(ActorResponse.Success(requestId, result.Result));
+                })
+                .ContinueWith(result =>
+                {
+                    self.Tell(PoisonPill.Instance);
+                });
         }
 
         private void HandleUserInvitation(AskToInviteUser message)
@@ -49,9 +75,11 @@ namespace FarmCraft.Users.Core.Actors
                     }
                     else
                         sender.Tell(ActorResponse.Success(requestId, result.Result));
+                })
+                .ContinueWith(result =>
+                {
+                    self.Tell(PoisonPill.Instance);
                 });
-
-            self.Tell(PoisonPill.Instance);
         }
 
         private void HandleUserRegistration(AskToRegisterUser message)
@@ -70,9 +98,11 @@ namespace FarmCraft.Users.Core.Actors
                     }
                     else
                         sender.Tell(ActorResponse.Success(requestId, result.Result));
+                })
+                .ContinueWith(result =>
+                {
+                    self.Tell(PoisonPill.Instance);
                 });
-
-            self.Tell(PoisonPill.Instance);
         }
 
         private async Task<User> RegisterUser(AskToRegisterUser message)
@@ -183,6 +213,11 @@ namespace FarmCraft.Users.Core.Actors
 
             var result = await _inviteRepo.CreateInvitation(invite);
             return result;
+        }
+
+        private async Task<User?> FindUser(AskForUser message)
+        {
+            return await _userRepo.FindUserById(message.UserId);
         }
     }
 }

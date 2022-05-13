@@ -11,7 +11,7 @@
     <PackageReference Include="Akka" Version="1.4.38" />
     <PackageReference Include="Akka.TestKit" Version="1.4.38" />
     <PackageReference Include="Akka.TestKit.NUnit" Version="1.3.8" />
-    <PackageReference Include="FarmCraft.Core" Version="0.0.4-alpha" />
+    <PackageReference Include="FarmCraft.Core" Version="0.0.5-alpha" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Cosmos" Version="6.0.4" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="6.0.1" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="6.0.0" />

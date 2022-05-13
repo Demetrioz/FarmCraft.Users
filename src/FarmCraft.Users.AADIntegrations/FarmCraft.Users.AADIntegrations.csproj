@@ -4,7 +4,14 @@
     <AzureFunctionsVersion>v4</AzureFunctionsVersion>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Akka" Version="1.4.38" />
+    <PackageReference Include="Akka.DependencyInjection" Version="1.4.38" />
+    <PackageReference Include="Akka.Remote" Version="1.4.38" />
+    <PackageReference Include="Microsoft.Azure.Functions.Extensions" Version="1.1.0" />
     <PackageReference Include="Microsoft.NET.Sdk.Functions" Version="4.0.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\FarmCraft.Users.Data\FarmCraft.Users.Data.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="host.json">

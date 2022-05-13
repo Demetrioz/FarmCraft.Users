@@ -1,23 +1,19 @@
-﻿using Akka.Actor;
-using Akka.DependencyInjection;
-using FarmCraft.Core.Actors;
+﻿using FarmCraft.Core.Actors;
 using FarmCraft.Core.Messages;
 using FarmCraft.Users.Core.Actors;
+using FarmCraft.Users.Data.Messages.User;
 
 namespace FarmCraft.Users.Core
 {
     public class UserServiceManager : FarmCraftManager
     {
-        private readonly IActorRef _graphManager;
+        //private readonly IActorRef _graphManager;
 
         public UserServiceManager(IServiceProvider provider)
         {
-            Props props = DependencyResolver.For(Context.System).Props<GraphManager>();
-            _graphManager = Context.ActorOf(props, "GraphManager");
-
             Receive<FarmCraftMessage>(message => HandleMessage(message));
+            Receive<IUserMessage>(message => HandleWithInstanceOf<UserActor>(message));
         }
-
         private void HandleMessage(FarmCraftMessage message)
         {
             switch(message.MessageType)

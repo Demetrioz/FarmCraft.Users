@@ -11,3 +11,5 @@ _site
 .vs
 appsettings.json
 appsettings.*.json
+
+src/FarmCraft.Users.AADIntegrations/Properties/
